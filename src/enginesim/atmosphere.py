@@ -1,11 +1,9 @@
-"""International Standard Atmosphere helpers.
-
-The model covers the troposphere and lower isothermal stratosphere, which is
-adequate for the preliminary small-aircraft studies this package targets.
-"""
+"""International Standard Atmosphere helpers using imperial API units."""
 
 from dataclasses import dataclass
 import math
+
+from .units import FT_TO_M, K_TO_R, PSF_TO_PA, R_TO_K, SLUG_TO_KG, r_to_f
 
 
 G0 = 9.80665
@@ -19,19 +17,24 @@ TROP_PAUSE_M = 11000.0
 
 @dataclass(frozen=True)
 class Atmosphere:
-    altitude_m: float
-    temperature_k: float
-    pressure_pa: float
-    density_kg_m3: float
-    speed_of_sound_m_s: float
+    altitude_ft: float
+    temperature_r: float
+    pressure_psf: float
+    density_slug_ft3: float
+    speed_of_sound_ft_s: float
     gamma: float = GAMMA_AIR
-    gas_constant_j_kgk: float = R_AIR
+    gas_constant_ft_lbf_slug_r: float = 1716.59
+
+    @property
+    def temperature_f(self) -> float:
+        """Temperature in degrees Fahrenheit, for display convenience."""
+        return r_to_f(self.temperature_r)
 
 
-def isa(altitude_m: float) -> Atmosphere:
-    """Return a standard-atmosphere state for geometric altitude in metres."""
+def _isa_si(altitude_m: float) -> tuple[float, float, float, float]:
+    """Return temperature, pressure, density, and sound speed in SI units."""
     if altitude_m < -5000.0 or altitude_m > 20000.0:
-        raise ValueError("isa() supports altitudes from -5000 m through 20000 m")
+        raise ValueError("isa() supports altitudes from -16404 ft through 65617 ft")
 
     h = float(altitude_m)
     if h <= TROP_PAUSE_M:
@@ -49,12 +52,25 @@ def isa(altitude_m: float) -> Atmosphere:
         )
     density = pressure / (R_AIR * temperature)
     sound = math.sqrt(GAMMA_AIR * R_AIR * temperature)
-    return Atmosphere(h, temperature, pressure, density, sound)
+    return temperature, pressure, density, sound
 
 
-def stagnation_temperature(static_temperature_k: float, mach: float, gamma: float = GAMMA_AIR) -> float:
-    return static_temperature_k * (1.0 + 0.5 * (gamma - 1.0) * mach**2)
+def isa(altitude_ft: float) -> Atmosphere:
+    """Return a standard-atmosphere state for geometric altitude in feet."""
+    altitude_m = float(altitude_ft) * FT_TO_M
+    temperature_k, pressure_pa, density_kg_m3, sound_m_s = _isa_si(altitude_m)
+    return Atmosphere(
+        altitude_ft=float(altitude_ft),
+        temperature_r=temperature_k * K_TO_R,
+        pressure_psf=pressure_pa / PSF_TO_PA,
+        density_slug_ft3=density_kg_m3 * FT_TO_M**3 / SLUG_TO_KG,
+        speed_of_sound_ft_s=sound_m_s / FT_TO_M,
+    )
 
 
-def stagnation_pressure(static_pressure_pa: float, mach: float, gamma: float = GAMMA_AIR) -> float:
-    return static_pressure_pa * (1.0 + 0.5 * (gamma - 1.0) * mach**2) ** (gamma / (gamma - 1.0))
+def stagnation_temperature(static_temperature_r: float, mach: float, gamma: float = GAMMA_AIR) -> float:
+    return static_temperature_r * (1.0 + 0.5 * (gamma - 1.0) * mach**2)
+
+
+def stagnation_pressure(static_pressure_psf: float, mach: float, gamma: float = GAMMA_AIR) -> float:
+    return static_pressure_psf * (1.0 + 0.5 * (gamma - 1.0) * mach**2) ** (gamma / (gamma - 1.0))

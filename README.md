@@ -27,13 +27,13 @@ static testing, high-speed testing, or flight safety analysis.
 
 ```bash
 python -m pip install -e .
-py-engine-sim --preset p1000 --altitude-m 3000 --mach 1.05
+py-engine-sim --preset p1000 --altitude-ft 9843 --mach 1.05
 ```
 
 The command prints JSON. Use `--pretty` for readable output.
 
 ```bash
-py-engine-sim --preset p1000 --altitude-m 0 --mach 0 --pretty
+py-engine-sim --preset p1000 --altitude-ft 0 --mach 0 --pretty
 ```
 
 ## Python API
@@ -45,11 +45,11 @@ from enginesim.turbojet import FlightCondition, evaluate_turbojet
 engine = p1000_like()
 result = evaluate_turbojet(
     engine,
-    FlightCondition(altitude_m=3000.0, mach=1.05),
+    FlightCondition(altitude_ft=9843.0, mach=1.05),
     throttle=1.0,
 )
 
-print(result.net_thrust_n, result.fuel_flow_kg_s)
+print(result.net_thrust_lbf, result.fuel_flow_lbm_s)
 ```
 
 ## Parameter calibration
@@ -68,9 +68,13 @@ internal station variable is known. A defensible workflow is:
 
 ## Units and limitations
 
-The public API uses SI units: metres, seconds, pascals, kelvin, kilograms,
-newtons, and kilograms per second. The cycle uses constant specific heats and
-simple component efficiencies. It does not model a real compressor map,
+The public API uses imperial aerospace units: feet, inches, psf, degrees
+Rankine, slug/ft^3, ft/s, lbm/s, lbf, and lbm/(lbf h). Temperatures are
+reported in degrees Rankine because that is the absolute temperature scale
+needed by the thermodynamic equations; `Atmosphere.temperature_f` is available
+for display in degrees Fahrenheit. The solver converts to SI internally. The
+cycle uses constant specific heats and simple component efficiencies. It does
+not model a real compressor map,
 surge, rotating stall, combustor dynamics, ECU control logic, inlet distortion,
 3-D shocks, separated flow, or aeroelastic effects.
 
@@ -81,4 +85,3 @@ original pages explain that EngineSim accepts altitude, Mach, throttle, inlet,
 compressor, burner, turbine, and nozzle inputs, while the nozzle tool uses
 throat area, exit-area ratio, chamber total conditions, and free-stream
 pressure.
-

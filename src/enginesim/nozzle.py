@@ -1,11 +1,38 @@
-"""One-dimensional compressible nozzle calculations."""
+"""One-dimensional compressible nozzle calculations.
+
+The public interface uses psf, degrees Rankine, inches squared, ft/s, lbm/s,
+and lbf. The calculation itself is performed in SI units.
+"""
 
 from dataclasses import dataclass
 import math
 
+from .units import (
+    FT_LBF_PER_SLUG_R_TO_J_PER_KG_K,
+    FT_TO_M,
+    IN_TO_M,
+    K_TO_R,
+    LBM_TO_KG,
+    LBF_TO_N,
+    PSF_TO_PA,
+)
+
 
 @dataclass(frozen=True)
 class NozzleResult:
+    choked: bool
+    exit_mach: float
+    exit_pressure_psf: float
+    exit_temperature_r: float
+    exit_velocity_ft_s: float
+    mass_flow_lbm_s: float
+    gross_thrust_lbf: float
+    pressure_thrust_lbf: float
+    exit_area_in2: float
+
+
+@dataclass(frozen=True)
+class _NozzleResultSI:
     choked: bool
     exit_mach: float
     exit_pressure_pa: float
@@ -32,46 +59,73 @@ def _mach_for_area_ratio(area_ratio: float, gamma: float, supersonic: bool) -> f
     for _ in range(120):
         mid = 0.5 * (lo + hi)
         value = _area_ratio(mid, gamma)
-        if supersonic:
-            if value > area_ratio:
-                lo = mid
-            else:
-                hi = mid
+        if value > area_ratio:
+            lo = mid
         else:
-            if value > area_ratio:
-                lo = mid
-            else:
-                hi = mid
+            hi = mid
     return 0.5 * (lo + hi)
 
 
 def solve_nozzle(
+    total_pressure_psf: float,
+    total_temperature_r: float,
+    ambient_pressure_psf: float,
+    throat_area_in2: float,
+    *,
+    exit_area_ratio: float = 1.0,
+    gamma: float = 1.30,
+    gas_constant_ft_lbf_slug_r: float = 1716.59,
+    nozzle_efficiency: float = 0.97,
+    incoming_mass_flow_lbm_s: float | None = None,
+    flight_speed_ft_s: float = 0.0,
+) -> NozzleResult:
+    """Solve an idealized convergent or convergent-divergent nozzle.
+
+    Inputs and outputs use imperial aerospace units. ``incoming_mass_flow_lbm_s``
+    and ``flight_speed_ft_s`` are accepted for API symmetry; nozzle gross
+    thrust is calculated from nozzle flow.
+    """
+    if total_pressure_psf <= 0 or total_temperature_r <= 0 or ambient_pressure_psf <= 0:
+        raise ValueError("pressures and temperature must be positive")
+    if throat_area_in2 <= 0 or exit_area_ratio < 1.0:
+        raise ValueError("throat area must be positive and exit area ratio >= 1")
+    if not 0 < nozzle_efficiency <= 1:
+        raise ValueError("nozzle efficiency must be in (0, 1]")
+
+    result = _solve_nozzle_si(
+        total_pressure_pa=total_pressure_psf * PSF_TO_PA,
+        total_temperature_k=total_temperature_r / K_TO_R,
+        ambient_pressure_pa=ambient_pressure_psf * PSF_TO_PA,
+        throat_area_m2=throat_area_in2 * IN_TO_M**2,
+        exit_area_ratio=exit_area_ratio,
+        gamma=gamma,
+        gas_constant_j_kgk=gas_constant_ft_lbf_slug_r * FT_LBF_PER_SLUG_R_TO_J_PER_KG_K,
+        nozzle_efficiency=nozzle_efficiency,
+    )
+    return NozzleResult(
+        choked=result.choked,
+        exit_mach=result.exit_mach,
+        exit_pressure_psf=result.exit_pressure_pa / PSF_TO_PA,
+        exit_temperature_r=result.exit_temperature_k * K_TO_R,
+        exit_velocity_ft_s=result.exit_velocity_m_s / FT_TO_M,
+        mass_flow_lbm_s=result.mass_flow_kg_s / LBM_TO_KG,
+        gross_thrust_lbf=result.gross_thrust_n / LBF_TO_N,
+        pressure_thrust_lbf=result.pressure_thrust_n / LBF_TO_N,
+        exit_area_in2=result.exit_area_m2 / IN_TO_M**2,
+    )
+
+
+def _solve_nozzle_si(
     total_pressure_pa: float,
     total_temperature_k: float,
     ambient_pressure_pa: float,
     throat_area_m2: float,
     *,
-    exit_area_ratio: float = 1.0,
-    gamma: float = 1.30,
-    gas_constant_j_kgk: float = 287.0,
-    nozzle_efficiency: float = 0.97,
-    incoming_mass_flow_kg_s: float | None = None,
-    flight_speed_m_s: float = 0.0,
-) -> NozzleResult:
-    """Solve an idealized convergent or convergent-divergent nozzle.
-
-    ``total_pressure_pa`` and ``total_temperature_k`` are nozzle-entry total
-    conditions. ``incoming_mass_flow_kg_s`` is used only to report gross
-    thrust minus ram drag outside this function; the returned gross thrust is
-    nozzle gross thrust including pressure thrust.
-    """
-    if total_pressure_pa <= 0 or total_temperature_k <= 0 or ambient_pressure_pa <= 0:
-        raise ValueError("pressures and temperature must be positive")
-    if throat_area_m2 <= 0 or exit_area_ratio < 1.0:
-        raise ValueError("throat area must be positive and exit area ratio >= 1")
-    if not 0 < nozzle_efficiency <= 1:
-        raise ValueError("nozzle efficiency must be in (0, 1]")
-
+    exit_area_ratio: float,
+    gamma: float,
+    gas_constant_j_kgk: float,
+    nozzle_efficiency: float,
+) -> _NozzleResultSI:
     critical_ratio = (2.0 / (gamma + 1.0)) ** (gamma / (gamma - 1.0))
     pressure_ratio = ambient_pressure_pa / total_pressure_pa
     choked = pressure_ratio <= critical_ratio
@@ -85,7 +139,9 @@ def solve_nozzle(
             total_pressure_pa
             * mdot_factor
             * exit_mach
-            * (1.0 + 0.5 * (gamma - 1.0) * exit_mach**2) ** (-(gamma + 1.0) / (2.0 * (gamma - 1.0)))
+            * (1.0 + 0.5 * (gamma - 1.0) * exit_mach**2) ** (
+                -(gamma + 1.0) / (2.0 * (gamma - 1.0))
+            )
             * exit_area
         )
     else:
@@ -99,7 +155,9 @@ def solve_nozzle(
         exit_area = throat_area_m2 * exit_area_ratio
         if exit_area_ratio > 1.0:
             exit_mach = _mach_for_area_ratio(exit_area_ratio, gamma, supersonic=True)
-            pressure_ratio_exit = (1.0 + 0.5 * (gamma - 1.0) * exit_mach**2) ** (-gamma / (gamma - 1.0))
+            pressure_ratio_exit = (1.0 + 0.5 * (gamma - 1.0) * exit_mach**2) ** (
+                -gamma / (gamma - 1.0)
+            )
             exit_pressure = total_pressure_pa * pressure_ratio_exit
         else:
             exit_mach = 1.0
@@ -110,7 +168,7 @@ def solve_nozzle(
     exit_velocity *= math.sqrt(nozzle_efficiency)
     pressure_thrust = (exit_pressure - ambient_pressure_pa) * exit_area
     gross_thrust = mass_flow * exit_velocity + pressure_thrust
-    return NozzleResult(
+    return _NozzleResultSI(
         choked=choked,
         exit_mach=exit_mach,
         exit_pressure_pa=exit_pressure,
